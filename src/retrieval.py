@@ -81,25 +81,54 @@ def classify_query(query: str) -> str:
 
 def _rerank_chunks(chunks: list[dict], query: str) -> list[dict]:
     """
-    Re-rank retrieved chunks by boosting those whose entity name
-    appears in the query. This simple heuristic significantly improves
-    retrieval relevance when the user mentions a specific entity.
+    Re-rank retrieved chunks using two heuristics:
+    1. Entity-name boosting: chunks whose entity name appears in the query
+       get a strong distance reduction.
+    2. Keyword-content boosting: chunks whose text contains important query
+       keywords get a moderate distance reduction. This helps surface chunks
+       that are keyword-relevant but semantically distant (e.g., searching
+       for "Turkey" should surface Hagia Sophia chunks that mention Turkey).
 
     Chunks mentioning the queried entity get their distance reduced (boosted).
     """
     query_lower = query.lower()
+    # Strip punctuation from query words
+    query_words = set(
+        w.strip("?.,!;:'\"()[]{}") for w in query_lower.split()
+    )
+
+    # Common stopwords to ignore for keyword matching
+    stopwords = {
+        "the", "of", "da", "jr", "jr.", "and", "in", "at", "to", "a", "an",
+        "is", "was", "are", "were", "it", "its", "this", "that", "which",
+        "who", "what", "where", "when", "why", "how", "for", "with", "from",
+        "about", "tell", "me", "can", "you", "do", "does", "did", "has",
+        "have", "had", "be", "been", "being", "will", "would", "could",
+        "should", "may", "might", "shall", "not", "no", "or", "but", "if",
+        "than", "so", "very", "just", "also", "most", "some", "any", "all",
+        "many", "much", "more", "other", "between", "famous", "known",
+        "located", "compare", "important",
+        # Domain-specific generic words that appear in most chunks
+        "place", "person", "people", "city", "country", "world", "history",
+        "used", "built", "made", "called", "named", "one", "two", "first",
+    }
+
+    # Extract significant keywords from the query (non-stopwords, length > 2)
+    significant_keywords = {
+        w for w in query_words
+        if w not in stopwords and len(w) > 2
+    }
+
     reranked = []
 
     for chunk in chunks:
         entity_name = chunk["metadata"]["entity_name"].lower()
         distance = chunk["distance"]
+        boost_applied = False
 
-        # Check if entity name (or parts of it) appear in query
+        # --- Heuristic 1: Entity-name boosting ---
         name_parts = entity_name.split()
-        query_words = set(query_lower.split())
-        # Skip common short words that cause false matches
         skip_words = {"the", "of", "da", "jr", "jr.", "and", "in", "at", "to"}
-        # Match if any significant part of the name is in the query words
         name_match = any(
             part in query_words
             for part in name_parts
@@ -107,9 +136,23 @@ def _rerank_chunks(chunks: list[dict], query: str) -> list[dict]:
         )
 
         if name_match:
-            # Boost matching entities by reducing their distance
             chunk["distance"] = distance * 0.5
             chunk["_boosted"] = True
+            boost_applied = True
+
+        # --- Heuristic 2: Keyword-content boosting ---
+        # Check if significant query keywords appear in the chunk text
+        if significant_keywords and not boost_applied:
+            chunk_text_lower = chunk["text"].lower()
+            matched_keywords = sum(
+                1 for kw in significant_keywords
+                if kw in chunk_text_lower
+            )
+            if matched_keywords > 0:
+                # Moderate boost proportional to keyword matches
+                keyword_boost = 0.85 ** matched_keywords
+                chunk["distance"] = chunk["distance"] * keyword_boost
+                chunk["_keyword_boosted"] = True
 
         reranked.append(chunk)
 
@@ -152,8 +195,8 @@ def retrieve_context(query: str, n_results: int = 8, query_type: str = None) -> 
 
     # Fetch more results than needed for re-ranking pool
     # A large pool ensures the re-ranker can boost entity-name matches
-    # even when semantic search ranks them lower
-    fetch_count = max(n_results * 5, 50)
+    # and keyword-content matches even when semantic search ranks them lower
+    fetch_count = max(n_results * 5, 150)
 
     # Query ChromaDB
     collection = get_collection()
