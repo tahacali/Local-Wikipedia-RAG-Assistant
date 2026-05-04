@@ -1,0 +1,29 @@
+# Byte-compiled
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+.env/
+
+# ChromaDB data (regenerated via ingestion)
+chroma_db/
+
+# Cached Wikipedia data (regenerated via ingestion)
+data/raw/*.json
+data/processed/*.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project spec (not part of deliverable)
+project.txt
